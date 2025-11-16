@@ -49,7 +49,7 @@ export const actualLesson = z.object({
 export const Lession = z.object({
 	date: z.string().date(),
 	classHour: classHour,
-	type: z.enum(['regularLesson', 'cancelledLesson', 'changedLesson', 'event']),
+	type: z.enum(['regularLesson', 'cancelledLesson', 'changedLesson', 'event', 'specialLesson']),
 	actualLesson: actualLesson.optional(),
 	originalLessons: z.array(actualLesson).optional(),
 	isSubstitution: z.boolean().optional(),
@@ -67,7 +67,7 @@ export const event = z.object({
 export const LessionWithEvent = z.object({
 	date: z.string().date(),
 	classHour: classHour,
-	type: z.enum(['regularLesson', 'cancelledLesson', 'changedLesson', 'event']),
+	type: z.enum(['regularLesson', 'cancelledLesson', 'changedLesson', 'event', 'specialLesson']),
 	actualLesson: actualLesson.optional(),
 	originalLessons: z.array(actualLesson).optional(),
 	isSubstitution: z.boolean().optional(),
