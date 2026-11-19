@@ -11,10 +11,10 @@
  * Learn more at https://developers.cloudflare.com/workers/
  */
 import ical, { ICalAttendeeData, ICalCategory, ICalEventClass, ICalEventStatus } from 'ical-generator';
-import fetchLogin from './login';
+import fetchLogin, { LoginError, LoginResponse } from './login';
 import moment from 'moment';
 import fetchTimes, { TimeSchema } from './times';
-import fetchTimetable, { Lession, Teacher } from './timetable';
+import fetchTimetable, { lesson, subject, Teacher } from './timetable';
 
 function TimeMap(time: TimeSchema[]) {
 	const timeMap = new Map<number, TimeSchema>();
@@ -30,15 +30,18 @@ export default {
 		const username = params.get('username');
 		const password = params.get('password');
 		const changes = parsebool(params.get('changes'));
-		console.log('Username:', username);
-		console.log('Password:', password);
 
 		if (!username || !password) {
 			return new Response('Missing username or password', { status: 400 });
 		}
 		// Fetch the JWT token
-		const login = await fetchLogin(username, password);
-		if (!login) return new Response('Login failed', { status: 401 });
+		let login: LoginResponse;
+		try {
+			login = await fetchLogin(username, password);
+		} catch (error) {
+			if (error instanceof LoginError) return new Response(error.message, { status: error.status });
+			throw error;
+		}
 		const jwt = login.jwt;
 		const studentId = login.user.associatedStudent?.id;
 		if (!studentId) return new Response('Student ID not found', { status: 401 });
@@ -60,9 +63,9 @@ export default {
 		Timetable.results[0].data.forEach((lesson) => {
 			const startTime = moment(lesson.date).startOf('day').add(Timemap.get(lesson.classHour.id)?.from, 'minutes');
 			const endTime = moment(lesson.date).startOf('day').add(Timemap.get(lesson.classHour.id)?.until, 'minutes');
-			console.log('Start Time:', startTime.toDate());
-			console.log('End Time:', endTime.toDate());
-
+			// console.log('Start Time:', startTime.toDate());
+			// console.log('End Time:', endTime.toDate());
+			// console.log(lesson.actualLesson?.room);
 			if (changes === true && lesson.type !== 'changedLesson') return;
 			if (changes === false && lesson.type === 'changedLesson') return;
 			calendar.createEvent({
@@ -77,12 +80,7 @@ export default {
 				},
 				location: formatRoom(lesson),
 				categories: [category],
-				status:
-					lesson.type === 'changedLesson'
-						? ICalEventStatus.TENTATIVE
-						: lesson.type === 'cancelledLesson'
-						? ICalEventStatus.CANCELLED
-						: ICalEventStatus.CONFIRMED,
+				status: getStatus(lesson),
 			});
 		});
 
@@ -96,15 +94,22 @@ export default {
 	},
 } satisfies ExportedHandler<Env>;
 
-function formatSubject(lession: Lession) {
-	const actualSubject = lession.actualLesson?.subjectLabel || 'No subject assigned';
-	const originalSubject = lession.originalLessons?.map((lesson) => lesson.subjectLabel).join(', ') || 'No subject assigned';
+function getStatus(lesson: lesson) {
+	if (lesson.actualLesson?.room.name === 'EVA') return ICalEventStatus.CANCELLED;
+	if (lesson.type === 'cancelledLesson') return ICalEventStatus.CANCELLED;
+	if (lesson.type === 'changedLesson') return ICalEventStatus.TENTATIVE;
+	return ICalEventStatus.CONFIRMED;
+}
+
+function formatSubject(lesson: lesson) {
+	const actualSubject = lesson.actualLesson?.subjectLabel || 'No subject assigned';
+	const originalSubject = lesson.originalLessons?.map((subject) => subject.subjectLabel).join(', ') || 'No subject assigned';
 	if (
-		lession.type === 'changedLesson' &&
-		lession.originalLessons &&
-		lession.originalLessons.length > 0 &&
-		lession.originalLessons[0]?.subject &&
-		lession.actualLesson?.subject.id !== lession.originalLessons[0].subject.id
+		lesson.type === 'changedLesson' &&
+		lesson.originalLessons &&
+		lesson.originalLessons.length > 0 &&
+		lesson.originalLessons[0]?.subject &&
+		lesson.actualLesson?.subject.id !== lesson.originalLessons[0].subject.id
 	) {
 		return `${originalSubject} -> ${actualSubject}`;
 	}
@@ -112,10 +117,10 @@ function formatSubject(lession: Lession) {
 	return actualSubject;
 }
 
-function formatTeachers(lession: Lession) {
+function formatTeachers(lesson: lesson) {
 	const output: ICalAttendeeData[] = [];
 
-	lession.actualLesson?.teachers.map((attendee) => {
+	lesson.actualLesson?.teachers.map((attendee) => {
 		output.push({
 			email: 'email',
 			name: `${attendee.firstname} ${attendee.lastname}`,
@@ -123,13 +128,13 @@ function formatTeachers(lession: Lession) {
 	});
 
 	if (
-		lession.type === 'changedLesson' &&
-		lession.originalLessons &&
-		lession.originalLessons.length > 0 &&
-		lession.originalLessons[0]?.teachers &&
-		lession.actualLesson?.teachers !== lession.originalLessons[0].teachers
+		lesson.type === 'changedLesson' &&
+		lesson.originalLessons &&
+		lesson.originalLessons.length > 0 &&
+		lesson.originalLessons[0]?.teachers &&
+		lesson.actualLesson?.teachers !== lesson.originalLessons[0].teachers
 	) {
-		lession.originalLessons[0].teachers.map((attendee) => {
+		lesson.originalLessons[0].teachers.map((attendee) => {
 			output.push({
 				email: 'email',
 				name: `normalerweise: ${attendee.firstname} ${attendee.lastname}`,
@@ -139,15 +144,15 @@ function formatTeachers(lession: Lession) {
 	return output;
 }
 
-function formatRoom(lession: Lession) {
-	const actualRoom = lession.actualLesson?.room.name || 'No room assigned';
-	const originalRooms = lession.originalLessons?.map((lesson) => lesson.room.name).join(', ') || 'No room assigned';
+function formatRoom(lesson: lesson) {
+	const actualRoom = lesson.actualLesson?.room.name || 'No room assigned';
+	const originalRooms = lesson.originalLessons?.map((lesson) => lesson.room.name).join(', ') || 'No room assigned';
 	if (
-		lession.type === 'changedLesson' &&
-		lession.originalLessons &&
-		lession.originalLessons.length > 0 &&
-		lession.originalLessons[0]?.room &&
-		lession.actualLesson?.room.id !== lession.originalLessons[0].room.id
+		lesson.type === 'changedLesson' &&
+		lesson.originalLessons &&
+		lesson.originalLessons.length > 0 &&
+		lesson.originalLessons[0]?.room &&
+		lesson.actualLesson?.room.id !== lesson.originalLessons[0].room.id
 	) {
 		return `${originalRooms} -> ${actualRoom}`;
 	}
